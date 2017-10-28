@@ -1,18 +1,19 @@
 import tensorflow as tf
 import numpy as np
 
-class ann:
+class ANN:
     normal = lambda *s: tf.random_normal(s, stddev=0.09, dtype=tf.float32)
     normal_4bnn = lambda *s: tf.random_normal(s, stddev=1., dtype=tf.float32)
     bayes_prior_std = 100.
     
     def __init__(self, input_shape, output_shape, configuration, activation=None, 
-                 bayesian=False, batchnorm=False, nsamples=2):
+                 bayesian=False, batchnorm=False, nsamples=2, lrep=True):
         if bayesian and batchnorm:
             raise(NotImplementedError("You shouldn't use batchnorm in bayesian networks"))
         
         configuration += [output_shape]
         
+        self.lrep = lrep
         self.weights = []
         self.offsnscales = []
         self.running_stats = []
@@ -23,8 +24,8 @@ class ann:
         self.bayesian = bayesian
         self.nsamples = nsamples
         
-        normal = ann.normal
-        normal_4bnn = ann.normal_4bnn
+        normal = ANN.normal
+        normal_4bnn = ANN.normal_4bnn
         
         def create_bn(inp_length):
             self.offsnscales.append([tf.Variable(normal(inp_length), name='mean_offset'), 
@@ -58,7 +59,8 @@ class ann:
         x = tf.concat(x, axis=-1)
 
         if self.bayesian:
-            x = tf.stack([x]*self.nsamples, axis=0)
+            if not self.lrep:
+                x = tf.stack([x]*self.nsamples, axis=0)
 
         def batch_matmul(x, y):
             temp = tf.transpose(tf.tensordot(x, y, axes=[[2], [1]]), perm=[0,2,1,3])
@@ -94,7 +96,13 @@ class ann:
         for i, (W, b) in enumerate(self.weights[:-1]):
             with tf.name_scope('layer_' + str(i+1)):
                 if self.bayesian:
-                    x = batch_matmul(x, W) + b[:,tf.newaxis,:]
+                    if not self.lrep:
+                        x = batch_matmul(x, W) + b[:,tf.newaxis,:]
+                    else:
+                        x_mu = tf.matmul(x, W['mu']) + b['mu']
+                        x_sigma = tf.matmul(x**2, W['std']**2) + b['std']**2
+                        x_sigma = tf.sqrt(x_sigma)
+                        x = tf.random_normal(tf.shape(x_mu))*x_sigma + x_mu
                 else:
                     x = tf.matmul(x, W) + b
                 if self.batchnorm:
@@ -104,7 +112,13 @@ class ann:
         W, b = self.weights[-1]
         with tf.name_scope('layer_' + str(len(self.weights))):
             if self.bayesian:
-                x = batch_matmul(x, W) + b[:,tf.newaxis,:]
+                if not self.lrep:
+                    x = batch_matmul(x, W) + b[:,tf.newaxis,:]
+                else:
+                    x_mu = tf.matmul(x, W['mu']) + b['mu']
+                    x_sigma = tf.matmul(x**2, W['std']**2) + b['std']**2
+                    x_sigma = tf.sqrt(x_sigma)
+                    x = tf.random_normal(tf.shape(x_mu))*x_sigma + x_mu
             else:
                 x = tf.matmul(x, W) + b
 
@@ -117,12 +131,11 @@ class ann:
 
         return x
     
-    @classmethod
-    def construct_bayes_weights(cls, in_dim, out_dim, nsamples):
+    def construct_bayes_weights(self, in_dim, out_dim, nsamples):
         kl = 0
-        normal = cls.normal
-        normal_4bnn = cls.normal_4bnn
-        bayes_prior_std = cls.bayes_prior_std
+        normal = ANN.normal
+        normal_4bnn = ANN.normal_4bnn
+        bayes_prior_std = ANN.bayes_prior_std
         
         with tf.variable_scope('W'):
             Wmean = tf.Variable(normal(in_dim, out_dim))
@@ -145,4 +158,8 @@ class ann:
         tf.summary.histogram('Wstd', Wstd)
         tf.summary.histogram('bstd', bstd)
         
-        return W_distr, b_distr, kl
+        if not self.lrep:
+            return W_distr, b_distr, kl
+        else:
+            return {'mu':Wmean, 'std':Wstd}, {'mu':bmean, 'std':bstd}, kl
+
