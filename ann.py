@@ -4,7 +4,7 @@ import numpy as np
 class ANN:
     normal = lambda *s: tf.random_normal(s, stddev=0.09, dtype=tf.float32)
     normal_4bnn = lambda *s: tf.random_normal(s, stddev=1., dtype=tf.float32)
-    bayes_prior_std = 100.
+    bayes_prior_std = .5
     
     def __init__(self, input_shape, output_shape, configuration, activation=None, 
                  bayesian=False, batchnorm=False, nsamples=2, lrep=True):
@@ -111,7 +111,7 @@ class ANN:
                         x = tf.matmul(x, W) + b
                     if self.batchnorm:
                         x = apply_bn(x, self.offsnscales[i], self.running_stats[i], mode)
-                    x = tf.nn.relu(x)
+                    x = tf.nn.tanh(x)
 
         W, b = self.weights[-1]
         with tf.variable_scope('layer_{}'.format(len(self.weights)), reuse=True):
